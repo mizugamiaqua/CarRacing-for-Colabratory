@@ -15,6 +15,21 @@ Google Colab で Gymnasium の `CarRacing-v3` を PPO (Stable-Baselines3) で学
 
 ローカル実行: `pip install -r requirements.txt && python -m carracing.train --out runs/x`
 
+## 学習済みデータを使って学習を速くする (モード切替)
+
+ノートブックのセル3の `MODE` を切り替えます。
+
+| MODE | 動作 | 目安時間 (T4) |
+|---|---|---|
+| `"scratch"` | 最初から学習。Drive に途中経過があれば自動再開 | 2〜3 時間 |
+| `"finetune"` | 既存の学習済みモデル (`INIT_FROM`) の重みから追加学習。結果は `<OUT>_ft` に保存 (元モデルは上書きしない) | 追加 100 万 step で 30〜60 分 (元モデルの出来次第) |
+| `"skip"` | `final_model.zip` があれば学習せず評価・動画のみ | 数分 |
+
+- `INIT_FROM` には Drive 上のパス、または `https://` の URL (他人が公開した互換モデルなど) を指定できます。
+- 互換モデルの条件: Stable-Baselines3 PPO の `CnnPolicy`、観測は `CarRacing-v3` を2フレームスタックしたもの (本リポジトリの設定で学習したもの)。
+- コマンドライン: `python -m carracing.train --out runs/ft --init-from runs/x/final_model.zip --steps 1000000` / `--skip-if-done`
+- 上記の短縮時間は目安で、実機では未計測です。
+
 ## 構成
 
 | ファイル | 内容 |

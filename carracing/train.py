@@ -2,7 +2,7 @@
 
 使い方: python -m carracing.train --out /content/drive/MyDrive/carracing --steps 4000000
 """
-import argparse, glob, os, re
+import argparse, glob, os, re, urllib.request
 
 import torch
 from stable_baselines3 import PPO
@@ -26,16 +26,35 @@ def latest_checkpoint(out):
     return best, best_n
 
 
+def fetch(path_or_url, dst_dir):
+    """URL ならダウンロードし、ローカルパスならそのまま返す。"""
+    if not path_or_url.startswith(("http://", "https://")):
+        return path_or_url
+    dst = os.path.join(dst_dir, "init_model.zip")
+    if not os.path.exists(dst):
+        print("download", path_or_url)
+        urllib.request.urlretrieve(path_or_url, dst)
+    return dst
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/carracing")
     ap.add_argument("--steps", type=int, default=C.TOTAL_TIMESTEPS)
     ap.add_argument("--n-envs", type=int, default=C.N_ENVS)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--init-from", default=None,
+                    help="既存の学習済み model.zip (パス or URL) の重みから学習を開始 (転移/追加学習)。"
+                         "--out に既にチェックポイントがあればそちらの再開を優先")
+    ap.add_argument("--skip-if-done", action="store_true",
+                    help="--out に final_model.zip があれば学習せず終了")
     ap.add_argument("--ckpt-every", type=int, default=200_000)
     a = ap.parse_args()
 
     os.makedirs(a.out, exist_ok=True)
+    if a.skip_if_done and os.path.exists(os.path.join(a.out, "final_model.zip")):
+        print("final_model.zip が既にあるため学習をスキップします")
+        return
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("device:", device)
 
@@ -48,6 +67,12 @@ def main():
         print(f"resume from {ckpt}")
         model = PPO.load(ckpt, env=venv, device=device,
                          custom_objects={"learning_rate": linear(C.LR_START)})
+    elif a.init_from:
+        src = fetch(a.init_from, a.out)
+        print(f"warm start from {src}")
+        model = PPO.load(src, env=venv, device=device, tensorboard_log=os.path.join(a.out, "tb"),
+                         custom_objects={"learning_rate": linear(C.LR_START)})
+        model.num_timesteps = 0  # この実行分のステップ数として数え直す
     else:
         model = PPO("CnnPolicy", venv, learning_rate=linear(C.LR_START), seed=a.seed,
                     device=device, verbose=1,

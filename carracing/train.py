@@ -2,7 +2,7 @@
 
 使い方: python -m carracing.train --out /content/drive/MyDrive/carracing --steps 4000000
 """
-import argparse, glob, os, re, urllib.request
+import argparse, glob, os, re, signal, urllib.request
 
 import torch
 from stable_baselines3 import PPO
@@ -35,6 +35,29 @@ def fetch(path_or_url, dst_dir):
         print("download", path_or_url)
         urllib.request.urlretrieve(path_or_url, dst)
     return dst
+
+
+def save_checkpoint(model, venv, out):
+    """中断時用の保存。通常のチェックポイントと同じ命名なので次回自動で再開される。"""
+    d = os.path.join(out, "ckpt")
+    os.makedirs(d, exist_ok=True)
+    n = model.num_timesteps
+    model.save(os.path.join(d, f"ppo_{n}_steps"))
+    venv.save(os.path.join(d, f"ppo_vecnormalize_{n}_steps.pkl"))
+    print(f"\n[interrupt] checkpoint saved at {n} steps -> 再実行で続きから再開します")
+
+
+def prune_checkpoints(out, keep=3):
+    """Drive 容量節約のため古いチェックポイントを削除 (最新 keep 個を残す)。"""
+    d = os.path.join(out, "ckpt")
+    steps = sorted(int(re.search(r"ppo_(\d+)_steps", p).group(1))
+                   for p in glob.glob(os.path.join(d, "ppo_*_steps.zip")))
+    for n in steps[:-keep]:
+        for f in (f"ppo_{n}_steps.zip", f"ppo_vecnormalize_{n}_steps.pkl"):
+            try:
+                os.remove(os.path.join(d, f))
+            except FileNotFoundError:
+                pass
 
 
 def main():
@@ -89,8 +112,16 @@ def main():
     ]
     remaining = a.steps - model.num_timesteps
     if remaining > 0:
-        model.learn(remaining, callback=cbs, reset_num_timesteps=False,
-                    tb_log_name="ppo", progress_bar=True)
+        # Colab の停止ボタン(KeyboardInterrupt)や SIGTERM でも現在地を保存して終了する
+        signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+        try:
+            model.learn(remaining, callback=cbs, reset_num_timesteps=False,
+                        tb_log_name="ppo", progress_bar=True)
+        except KeyboardInterrupt:
+            save_checkpoint(model, venv, a.out)
+            prune_checkpoints(a.out)
+            return
+        prune_checkpoints(a.out)
     model.save(os.path.join(a.out, "final_model"))
     venv.save(os.path.join(a.out, "vecnormalize.pkl"))
     print("saved to", a.out)
